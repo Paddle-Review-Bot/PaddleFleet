@@ -131,9 +131,12 @@ def _accuracy_compatible_projection(projection, hidden_states):
     RowParallelLinear o_proj: local F.linear, then TP reduce or SP
     reduce-scatter so the residual layout matches the fused layer.
     """
-    output_bias = projection.bias if projection.skip_bias_add else None
-    bias = None if projection.skip_bias_add else projection.bias
-    output = paddle.nn.functional.linear(hidden_states, projection.weight, bias)
+    skip_bias_add = getattr(projection, "skip_bias_add", False)
+    output_bias = projection.bias if skip_bias_add else None
+    # RowParallelLinear's bias is replicated. Adding it before the TP
+    # reduction would sum the same bias once per rank.
+    projection_bias = None if skip_bias_add else projection.bias
+    output = paddle.nn.functional.linear(hidden_states, projection.weight, None)
     tp_group = getattr(projection, "tp_group", None)
     if get_pg_size(tp_group) > 1:
         if getattr(projection, "sequence_parallel", False):
@@ -144,6 +147,8 @@ def _accuracy_compatible_projection(projection, hidden_states):
             output = reduce_from_tensor_model_parallel_region(
                 output, group=tp_group
             )
+    if projection_bias is not None:
+        output = output + projection_bias
     return output, output_bias
 
 

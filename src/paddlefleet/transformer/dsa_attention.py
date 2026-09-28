@@ -2186,14 +2186,10 @@ class DSAttention(FleetLayer):
         # Use detach() + stop_gradient=False so that:
         # 1. Gradients don't flow back to the main model (detach breaks the graph)
         # 2. Linear layers can still compute grad_input in backward without PyLayer errors
-        if not (
-            self.config.use_accuracy_compatible
-            and get_pg_size(self.pg_collection.tp) <= 1
-        ):
-            x = x.detach()
-            x.stop_gradient = False
-            qr = qr.detach()
-            qr.stop_gradient = False
+        x = x.detach()
+        x.stop_gradient = False
+        qr = qr.detach()
+        qr.stop_gradient = False
 
         # rotate_activation requires bf16 input
         assert x.dtype == paddle.bfloat16, (
