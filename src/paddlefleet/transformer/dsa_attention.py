@@ -1813,10 +1813,10 @@ def decoder_dsa_logical_layer(
     """Map a GPT physical layer id onto the decoder-only ``indexer_types`` index."""
     if is_mtp_layer:
         return layer_number
-    head_offset = getattr(config, "num_empty_layers_add_in_head", 0) or 0
+    head_offset = config.num_empty_layers_add_in_head
     logical_index = layer_number - head_offset
-    num_hidden_layers = getattr(config, "num_hidden_layers", 0) or 0
-    if num_hidden_layers and not 0 <= logical_index < num_hidden_layers:
+    num_hidden_layers = config.num_hidden_layers
+    if not 0 <= logical_index < num_hidden_layers:
         raise IndexError(
             f"decoder layer_number {layer_number} resolves to logical index "
             f"{logical_index}, outside [0, {num_hidden_layers})"
@@ -1826,11 +1826,9 @@ def decoder_dsa_logical_layer(
 
 def decoder_dsa_topk_producer_layer(config, layer_number: int) -> int:
     """Return the 0-based decoder layer that actually computes this layer's top-k."""
-    index_topk_freq = getattr(config, "dsa_indexer_topk_freq", None) or 1
-    index_skip_topk_offset = (
-        getattr(config, "dsa_indexer_skip_topk_offset", 0) or 0
-    )
-    indexer_types = getattr(config, "dsa_indexer_types", None)
+    index_topk_freq = config.dsa_indexer_topk_freq
+    index_skip_topk_offset = config.dsa_indexer_skip_topk_offset
+    indexer_types = config.dsa_indexer_types
     if indexer_types is not None:
         if not 0 <= layer_number < len(indexer_types):
             raise ValueError(
@@ -1869,15 +1867,11 @@ def _decoder_layer_publishes_shared_topk(config, layer_number: int) -> bool:
     """Whether a computing decoder layer must publish top-k for a later consumer."""
     if layer_number < 0:
         return False
-    index_topk_freq = getattr(config, "dsa_indexer_topk_freq", None) or 1
-    index_skip_topk_offset = (
-        getattr(config, "dsa_indexer_skip_topk_offset", 0) or 0
-    )
-    indexer_types = getattr(config, "dsa_indexer_types", None)
-    share_for_mtp_iteration = bool(
-        getattr(config, "dsa_index_share_for_mtp_iteration", False)
-    )
-    num_hidden_layers = getattr(config, "num_hidden_layers", 0) or 0
+    index_topk_freq = config.dsa_indexer_topk_freq
+    index_skip_topk_offset = config.dsa_indexer_skip_topk_offset
+    indexer_types = config.dsa_indexer_types
+    share_for_mtp_iteration = config.dsa_index_share_for_mtp_iteration
+    num_hidden_layers = config.num_hidden_layers
     if indexer_types is not None:
         for later, layer_type in enumerate(
             indexer_types[layer_number + 1 :], start=layer_number + 1
@@ -1931,10 +1925,8 @@ def resolve_dsa_indexer_layout(
     MTP when ``index_share_for_mtp_iteration`` is set, look up that producer
     rather than their own index.
     """
-    share_for_mtp_iteration = bool(
-        getattr(config, "dsa_index_share_for_mtp_iteration", False)
-    )
-    num_hidden_layers = getattr(config, "num_hidden_layers", 0) or 0
+    share_for_mtp_iteration = config.dsa_index_share_for_mtp_iteration
+    num_hidden_layers = config.num_hidden_layers
     if not is_mtp_layer:
         layer_number = decoder_dsa_logical_layer(config, layer_number)
     if is_mtp_layer:
@@ -1964,11 +1956,9 @@ def resolve_dsa_indexer_layout(
             source_layer = layer_number
         return indexer_type, skip_topk, skip_topk, source_layer
 
-    index_topk_freq = getattr(config, "dsa_indexer_topk_freq", None) or 1
-    index_skip_topk_offset = (
-        getattr(config, "dsa_indexer_skip_topk_offset", 0) or 0
-    )
-    indexer_types = getattr(config, "dsa_indexer_types", None)
+    index_topk_freq = config.dsa_indexer_topk_freq
+    index_skip_topk_offset = config.dsa_indexer_skip_topk_offset
+    indexer_types = config.dsa_indexer_types
     if indexer_types is not None and 0 <= layer_number < len(indexer_types):
         indexer_type = indexer_types[layer_number]
     else:
