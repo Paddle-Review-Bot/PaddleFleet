@@ -318,7 +318,8 @@ def _unfused_dsa_attention(
     )
     key_mqa = key
 
-    # Reshape for bmm: [b*nhpp, s, hd]
+    # Reshape for bmm: Q is allowed to be sequence-sharded while K/V are
+    # gathered under sequence parallel.
     q = query.transpose([0, 2, 1, 3]).reshape([b * nhpp, sq, qk_hd])
     if key.dim() == 4 and key.shape[2] == 1 and nhpp > 1:
         # MQA key broadcast to the query head count (absorbed core path).
@@ -339,7 +340,7 @@ def _unfused_dsa_attention(
     else:
         v = value.transpose([0, 2, 1, 3]).reshape([b * nhpp, sk, v_hd])
 
-    # Q * K^T with scale: [b*nhpp, s, s]
+    # Q * K^T with scale: [b*nhpp, sq, sk]
     attn_scores = (
         paddle.bmm(q.cast("float32"), k.cast("float32").transpose([0, 2, 1]))
         * softmax_scale
@@ -371,7 +372,7 @@ def _unfused_dsa_attention(
     # Attention_weights * V: [b*nhpp, s, v_hd]
     output = paddle.bmm(attn_weights.cast(v.dtype), v)
 
-    # [b*nhpp, s, v_hd] -> [b, s, nhpp*v_hd]
+    # [b*nhpp, sq, v_hd] -> [b, sq, nhpp*v_hd]
     output = (
         output.reshape([b, nhpp, sq, v_hd])
         .transpose([0, 2, 1, 3])
@@ -1969,7 +1970,12 @@ def resolve_dsa_indexer_layout(
     index_topk_freq = config.dsa_indexer_topk_freq
     index_skip_topk_offset = config.dsa_indexer_skip_topk_offset
     indexer_types = config.dsa_indexer_types
-    if indexer_types is not None and 0 <= layer_number < len(indexer_types):
+    if indexer_types is not None:
+        if not 0 <= layer_number < len(indexer_types):
+            raise ValueError(
+                f"Decoder layer {layer_number} is outside dsa_indexer_types "
+                f"length {len(indexer_types)}."
+            )
         indexer_type = indexer_types[layer_number]
     else:
         indexer_type = (
@@ -2014,6 +2020,8 @@ class DSAttention(FleetLayer):
             ...
         )
     """
+
+    supports_index_share_topk = True
 
     def __init__(
         self,
@@ -2097,6 +2105,8 @@ class DSAttention(FleetLayer):
         essential: a config is shared by all micro-batches and virtual
         pipeline chunks, while a top-k result belongs to one forward lifetime.
         """
+        if holder is not None and not isinstance(holder, dict):
+            raise TypeError("DSA top-k holder must be a dict or None")
         return holder
 
     def _publish_index_share_topk(
@@ -2201,13 +2211,14 @@ class DSAttention(FleetLayer):
         # be added onto [s, s] scores.
         b, sq, np, hn = query.shape
         sk = key.shape[1]
-        indexer_sq, indexer_sk = sq, sk
-        if (
+        sp_enabled = (
             self.config.sequence_parallel
             and self.pg_collection.tp is not None
             and self.pg_collection.tp.nranks > 1
             and x.ndim == 3
-        ):
+        )
+        indexer_sq, indexer_sk = sq, sk
+        if sp_enabled:
             gathered = int(x.shape[0]) * int(self.pg_collection.tp.nranks)
             indexer_sq = gathered
             indexer_sk = gathered
@@ -2296,8 +2307,8 @@ class DSAttention(FleetLayer):
                 q_idx,
                 weights_idx,
                 k_idx,
-                query.detach(),
-                key.detach(),
+                indexer_query.detach(),
+                indexer_key.detach(),
                 self.softmax_scale,
                 self.indexer.index_topk,
                 self.dsa_indexer_loss_coeff,
@@ -2333,6 +2344,8 @@ class DSAttention(FleetLayer):
             ],
             dtype="float32",
         )
+        valid_topk = topk_indices >= 0
+        safe_topk = paddle.clip(topk_indices, min=0, max=indexer_sk - 1)
         index_mask = paddle.put_along_axis(
             index_mask,
             safe_topk,
